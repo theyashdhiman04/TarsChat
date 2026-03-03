@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/theyashdhiman04/TarsChat/main/public/logo.png" alt="TarsChat Logo" width="120" padding="20" style="border-radius: 20px;" onerror="this.outerHTML='<h1 align=\'center\'>💬 TarsChat</h1>'"/>
+  <h1>💬 TarsChat</h1>
   
   <p align="center">
     <strong>A modern, real-time messaging web application built for seamless communication.</strong>
