@@ -1,12 +1,23 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+export const generateUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
 export const sendMessage = mutation({
   args: {
     conversationId: v.id("conversations"),
     content: v.string(),
+    imageStorageId: v.optional(v.id("_storage")),
+    imageMimeType: v.optional(v.string()),
   },
-  handler: async (ctx, { conversationId, content }) => {
+  handler: async (ctx, { conversationId, content, imageStorageId, imageMimeType }) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
@@ -16,17 +27,23 @@ export const sendMessage = mutation({
       .unique();
     if (!me) throw new Error("User not found");
 
+    if (content.trim().length === 0 && !imageStorageId) {
+      throw new Error("Message is empty");
+    }
+
     const msgId = await ctx.db.insert("messages", {
       conversationId,
       senderId: me._id,
       content,
+      imageStorageId,
+      imageMimeType,
       isDeleted: false,
       reactions: [],
     });
 
     await ctx.db.patch(conversationId, {
       lastMessageTime: Date.now(),
-      lastMessagePreview: content.slice(0, 100),
+      lastMessagePreview: (imageStorageId ? "📷 Image" : content).slice(0, 100),
     });
 
     return msgId;
@@ -47,7 +64,10 @@ export const listMessages = query({
     const enriched = await Promise.all(
       messages.map(async (msg) => {
         const sender = await ctx.db.get(msg.senderId);
-        return { ...msg, sender };
+        const imageUrl = msg.imageStorageId
+          ? await ctx.storage.getUrl(msg.imageStorageId)
+          : null;
+        return { ...msg, sender, imageUrl };
       })
     );
 

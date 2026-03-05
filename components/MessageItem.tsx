@@ -4,7 +4,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { formatMessageTime } from "../libs/utils";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Copy, Check } from "lucide-react";
 
 interface MessageBubbleProps {
@@ -13,10 +13,12 @@ interface MessageBubbleProps {
       name?: string;
       imageUrl?: string;
     };
+    imageUrl?: string | null;
   };
   isSender: boolean;
   reactionOptions: string[];
   viewerId?: Id<"users">;
+  highlightQuery?: string;
 }
 
 export default function MessageBubble({
@@ -24,15 +26,41 @@ export default function MessageBubble({
   isSender,
   reactionOptions,
   viewerId,
+  highlightQuery,
 }: MessageBubbleProps) {
   const reactToMessage = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
   const [isDeleting, setIsDeleting] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const highlightedContent = useMemo(() => {
+    const text = data.content ?? "";
+    const q = (highlightQuery ?? "").trim();
+    if (!q) return text;
+    const lower = text.toLowerCase();
+    const qLower = q.toLowerCase();
+    const parts: Array<string | { match: string }> = [];
+    let i = 0;
+    while (i < text.length) {
+      const idx = lower.indexOf(qLower, i);
+      if (idx === -1) {
+        parts.push(text.slice(i));
+        break;
+      }
+      if (idx > i) parts.push(text.slice(i, idx));
+      parts.push({ match: text.slice(idx, idx + q.length) });
+      i = idx + q.length;
+    }
+    return parts;
+  }, [data.content, highlightQuery]);
+
   const handleCopy = async () => {
     if (data.isDeleted) return;
-    await navigator.clipboard.writeText(data.content);
+    const toCopy = data.content?.trim()
+      ? data.content
+      : data.imageUrl ?? "";
+    if (!toCopy) return;
+    await navigator.clipboard.writeText(toCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -122,9 +150,42 @@ const handleDelete = async () => {
                   : "bg-transparent text-[#ececec] border border-[#2a1f3d] rounded-bl-sm" // Receiver
               }`}
             >
-              <p className="text-[15px] leading-relaxed whitespace-pre-wrap break-words font-medium">
-                {data.content}
-              </p>
+              {data.imageUrl && (
+                <a
+                  href={data.imageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block"
+                  title="Open image"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={data.imageUrl}
+                    alt={data.sender?.name ? `${data.sender.name} image` : "Chat image"}
+                    className="max-h-[320px] w-auto max-w-full rounded-xl border border-white/10 object-contain bg-black/20"
+                    loading="lazy"
+                  />
+                </a>
+              )}
+
+              {Boolean((data.content ?? "").trim()) && (
+                <p className={`text-[15px] leading-relaxed whitespace-pre-wrap break-words font-medium ${data.imageUrl ? "mt-2" : ""}`}>
+                  {typeof highlightedContent === "string"
+                    ? highlightedContent
+                    : highlightedContent.map((p, idx) =>
+                        typeof p === "string" ? (
+                          <span key={idx}>{p}</span>
+                        ) : (
+                          <span
+                            key={idx}
+                            className="rounded-sm bg-[#A7F0A7]/18 px-0.5 text-[#ececec] ring-1 ring-[#A7F0A7]/25"
+                          >
+                            {p.match}
+                          </span>
+                        )
+                      )}
+                </p>
+              )}
             </div>
           )}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import MessageItem from "./MessageItem";
 import TypingIndicator from "./TypingIndicator";
-import { Send, Smile, Paperclip, ChevronLeft, MoreVertical, Phone } from "lucide-react";
+import { Send, Smile, Paperclip, ChevronLeft, MoreVertical, Phone, Search, X, Loader2 } from "lucide-react";
 import  {formatTimestamp}  from "../libs/utils";
 
 const REACTIONS = ["😂", "🫡", "❤️", "💀", "😮", "😢", "😍"];
@@ -24,6 +24,11 @@ export default function ChatWindow({ conversationId }: Props) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showNewMessages, setShowNewMessages] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   
   // Refs
@@ -33,6 +38,7 @@ export default function ChatWindow({ conversationId }: Props) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Convex Hooks
   const conversation = useQuery(api.users_conversations.getConversation, { conversationId });
@@ -40,6 +46,7 @@ export default function ChatWindow({ conversationId }: Props) {
   const typingUsers = useQuery(api.messages.getTypingUsers, { conversationId });
 
   const sendMessage = useMutation(api.messages.sendMessage);
+  const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
 
   const setTyping = useMutation(api.messages.setTyping);
   const markAsRead = useMutation(api.messages.markAsRead);
@@ -86,25 +93,85 @@ export default function ChatWindow({ conversationId }: Props) {
     }
   }, [messages, conversationId, markAsRead, isAtBottom, scrollToBottom,]);
 
+  useEffect(() => {
+    return () => {
+      if (selectedImagePreviewUrl) URL.revokeObjectURL(selectedImagePreviewUrl);
+    };
+  }, [selectedImagePreviewUrl]);
+
+  const clearSelectedImage = useCallback(() => {
+    setSelectedImage(null);
+    if (selectedImagePreviewUrl) URL.revokeObjectURL(selectedImagePreviewUrl);
+    setSelectedImagePreviewUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, [selectedImagePreviewUrl]);
+
+  const handlePickImage = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setSendError("Please select an image file.");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setSendError("Image is too large (max 8MB).");
+      e.target.value = "";
+      return;
+    }
+    setSendError(null);
+    setSelectedImage(file);
+    if (selectedImagePreviewUrl) URL.revokeObjectURL(selectedImagePreviewUrl);
+    setSelectedImagePreviewUrl(URL.createObjectURL(file));
+  };
+
   const handleSend = async () => {
     const content = input.trim();
-    if (!content) return;
-     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-  setTyping({ conversationId, isTyping: false }).catch(() => {});
+    const imageFile = selectedImage;
+    if (!content && !imageFile) return;
 
-    setInput("");
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    setTyping({ conversationId, isTyping: false }).catch(() => {});
+
     setSendError(null);
 
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-    }
-
     try {
-      await sendMessage({ conversationId, content });
+      let imageStorageId: string | undefined;
+      let imageMimeType: string | undefined;
+
+      if (imageFile) {
+        setIsUploadingImage(true);
+        const postUrl = await generateUploadUrl({});
+        const result = await fetch(postUrl, {
+          method: "POST",
+          headers: { "Content-Type": imageFile.type },
+          body: imageFile,
+        });
+        const json = (await result.json()) as { storageId?: string };
+        if (!json.storageId) throw new Error("Upload failed");
+        imageStorageId = json.storageId;
+        imageMimeType = imageFile.type;
+      }
+
+      await sendMessage({
+        conversationId,
+        content: content ?? "",
+        imageStorageId,
+        imageMimeType,
+      });
+
+      setInput("");
+      clearSelectedImage();
+      if (inputRef.current) inputRef.current.style.height = "auto";
       setTimeout(() => scrollToBottom(true), 10);
     } catch {
       setSendError("Failed to send.");
-      setInput(content);
+    } finally {
+      setIsUploadingImage(false);
     }
   };
 
@@ -151,6 +218,16 @@ export default function ChatWindow({ conversationId }: Props) {
   };
 
   const { name, subtitle, avatar, isOnline } = getHeaderInfo();
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const filteredMessages = useMemo(() => {
+    if (!messages) return messages;
+    if (!normalizedSearch) return messages;
+    return messages.filter((m) => {
+      if (!m) return false;
+      const text = (m.content ?? "").toLowerCase();
+      return text.includes(normalizedSearch);
+    });
+  }, [messages, normalizedSearch]);
 
   return (
     // FIX: Main Container uses w-full and flex-col to fill space correctly next to sidebar
@@ -207,6 +284,13 @@ export default function ChatWindow({ conversationId }: Props) {
         </div>
 
         <div className="flex items-center gap-1 text-[#8e8ea0]">
+            <button
+              onClick={() => setIsSearchOpen((v) => !v)}
+              className={`p-1.5 rounded-lg transition-colors ${isSearchOpen ? "bg-[#2a1f3d] text-[#A7F0A7]" : "hover:bg-[#2a1f3d] hover:text-[#A7F0A7]"}`}
+              title="Search chat history"
+            >
+              <Search className="w-4 h-4" />
+            </button>
             <button className="p-1.5 hover:bg-[#2a1f3d] rounded-lg hover:text-[#A7F0A7] transition-colors">
                 <Phone className="w-4 h-4" />
             </button>
@@ -214,6 +298,33 @@ export default function ChatWindow({ conversationId }: Props) {
                 <MoreVertical className="w-4 h-4" />
             </button>
         </div>
+
+        {isSearchOpen && (
+          <div className="absolute left-0 right-0 top-full z-30 border-b border-[#2a1f3d]/70 bg-[#1a1228]/95 backdrop-blur-md px-3 sm:px-4 md:px-5 py-2">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 relative">
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search messages…"
+                  className="w-full rounded-xl border border-[#2a1f3d] bg-[#0f0a18] px-3 py-2 text-sm text-[#ececec] placeholder-[#6b6b7b] outline-none focus:border-[#6A2FBC]/60 focus:ring-1 focus:ring-[#6A2FBC]/20"
+                />
+                {searchQuery.trim() && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-[#8e8ea0] hover:text-[#A7F0A7] hover:bg-[#2a1f3d]/60 transition-colors"
+                    title="Clear"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-[#5c5c6e] whitespace-nowrap">
+                {normalizedSearch ? `${filteredMessages?.filter(Boolean).length ?? 0} match` : " "}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* --- MESSAGES AREA --- */}
@@ -235,24 +346,26 @@ export default function ChatWindow({ conversationId }: Props) {
               </div>
             ))}
           </div>
-        ) : messages.length === 0 ? (
+        ) : (filteredMessages?.length ?? 0) === 0 ? (
           // Empty State
           <div className="flex flex-col items-center justify-center h-full pb-20 text-center opacity-0 animate-in fade-in zoom-in-95 duration-700 fill-mode-forwards">
              <div className="w-16 h-16 bg-[#1a1228] rounded-2xl flex items-center justify-center border border-[#2a1f3d] mb-4 transform hover:rotate-3 transition-transform">
                 <div className="w-8 h-8 bg-[#6A2FBC] rounded-lg flex items-center justify-center">
-                    <span className="text-lg">👋</span>
+                    <span className="text-lg">{normalizedSearch ? "🔎" : "👋"}</span>
                 </div>
              </div>
-             <p className="text-[10px] font-bold text-[#6A2FBC] uppercase tracking-[0.2em] mb-1">Start</p>
+             <p className="text-[10px] font-bold text-[#6A2FBC] uppercase tracking-[0.2em] mb-1">
+               {normalizedSearch ? "No results" : "Start"}
+             </p>
              <p className="text-xs text-[#8e8ea0] max-w-[180px]">
-                Say hello to <span className="text-[#A7F0A7] font-medium">{name}</span>.
+                {normalizedSearch ? "Try a different search term." : <>Say hello to <span className="text-[#A7F0A7] font-medium">{name}</span>.</>}
              </p>
           </div>
         ) : (
           <>
             {/* Message List */}
-            {messages.filter(Boolean).map((msg, idx) => {
-              const prevMsg = messages[idx - 1];
+            {filteredMessages!.filter(Boolean).map((msg, idx) => {
+              const prevMsg = filteredMessages![idx - 1];
               const showDateDivider =
                 !prevMsg ||
                 new Date(msg._creationTime).toDateString() !== new Date(prevMsg._creationTime).toDateString();
@@ -277,13 +390,14 @@ export default function ChatWindow({ conversationId }: Props) {
                     isSender={msg.senderId === currentUser?._id}
                     reactionOptions={REACTIONS}
                     viewerId={currentUser?._id}
+                    highlightQuery={normalizedSearch ? searchQuery : undefined}
                   />
                 </div>
               );
             })}
             {/* extra feature typing indicator */}
             {/* Typing Indicator */}
-            {typingUsers && typingUsers.length > 0 && (
+            {typingUsers && typingUsers.length > 0 && !normalizedSearch && (
               <div className="pl-4 py-2 animate-in fade-in slide-in-from-left-2 duration-300">
                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                  <TypingIndicator users={typingUsers as any[]} />
@@ -314,20 +428,60 @@ export default function ChatWindow({ conversationId }: Props) {
 <div className="shrink-0 z-20 p-3 sm:p-4 pt-1 pb-[calc(0.75rem+env(safe-area-inset-bottom))] bg-gradient-to-t from-[#1a1228] via-[#1a1228] to-transparent">
         <div className="relative bg-[#0f0a18] border border-[#2a1f3d] rounded-xl flex items-end px-3 py-2 transition-all focus-within:border-[#6A2FBC]/60 focus-within:ring-1 focus-within:ring-[#6A2FBC]/20">
           
-          <button className="p-1.5 text-[#8e8ea0] hover:text-[#A7F0A7] hover:bg-[#2a1f3d]/50 rounded-lg transition-all mr-1 shrink-0">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleImageChange}
+          />
+
+          <button
+            onClick={handlePickImage}
+            className="p-1.5 text-[#8e8ea0] hover:text-[#A7F0A7] hover:bg-[#2a1f3d]/50 rounded-lg transition-all mr-1 shrink-0"
+            title="Attach image"
+          >
              <Paperclip className="w-5 h-5" />
           </button>
 
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder={`Message ${conversation?.isGroup ? 'Group' : name.split(' ')[0]}...`}
-            rows={1}
-            className="flex-1 bg-transparent text-[#ececec] placeholder-[#6b6b7b] focus:outline-none resize-none max-h-[150px] custom-scrollbar leading-relaxed py-2 font-medium text-sm"
-            style={{ minHeight: '24px' }}
-          />
+          <div className="flex-1 min-w-0">
+            {selectedImagePreviewUrl && (
+              <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#2a1f3d] bg-black/20 p-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={selectedImagePreviewUrl}
+                  alt="Selected"
+                  className="h-12 w-12 rounded-lg object-cover border border-white/10"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-[#8e8ea0] truncate">
+                    {selectedImage?.name ?? "Image"}
+                  </div>
+                  <div className="text-[10px] text-[#5c5c6e]">
+                    {(selectedImage?.size ? `${Math.round(selectedImage.size / 1024)} KB` : "")}
+                  </div>
+                </div>
+                <button
+                  onClick={clearSelectedImage}
+                  className="p-1.5 rounded-lg text-[#8e8ea0] hover:text-[#A7F0A7] hover:bg-[#2a1f3d]/60 transition-colors"
+                  title="Remove image"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder={`Message ${conversation?.isGroup ? 'Group' : name.split(' ')[0]}...`}
+              rows={1}
+              className="w-full bg-transparent text-[#ececec] placeholder-[#6b6b7b] focus:outline-none resize-none max-h-[150px] custom-scrollbar leading-relaxed py-2 font-medium text-sm"
+              style={{ minHeight: '24px' }}
+            />
+          </div>
           
           <div className="flex items-center gap-1 ml-2 mb-0.5 shrink-0">
              <button className="text-[#8e8ea0] hover:text-[#A7F0A7] transition-colors hidden sm:block p-1.5 hover:bg-[#2a1f3d]/50 rounded-lg">
@@ -336,15 +490,15 @@ export default function ChatWindow({ conversationId }: Props) {
              
              <button
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={isUploadingImage || (!input.trim() && !selectedImage)}
                 className={`
                   p-2 transition-all shrink-0 rounded-lg flex items-center justify-center
-                  ${input.trim() 
+                  ${(!isUploadingImage && (input.trim() || selectedImage))
                   ? 'bg-[#6A2FBC] hover:bg-[#7B3FE8] text-white border border-[#A7F0A7]/20' 
                   : 'bg-[#2a1f3d] text-[#5c5c6e] cursor-not-allowed'}
                 `}
                 >
-                <Send className="w-4 h-4 ml-0.5" />
+                {isUploadingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 ml-0.5" />}
              </button>
           </div>
           

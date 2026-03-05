@@ -159,7 +159,7 @@ export default function Home() {
 
                     <div className="space-y-3">
                       <h1 className="text-3xl md:text-5xl font-semibold tracking-tight text-white leading-[1.05]">
-                        Chat that feels instant.
+                        TarsChat.
                       </h1>
                       <p className="text-sm md:text-base text-[#b8b8c8] leading-relaxed max-w-xl">
                         DMs, groups, and live rooms with typing indicators, search, and crisp delivery—powered by Convex and secured with Clerk.
@@ -283,12 +283,12 @@ export default function Home() {
         <p className="text-[11px] text-[#5c5c6e] tracking-wide">
           Built by{" "}
           <a
-            href="https://github.com/theyashdhiman04"
+            href="https://github.com/theyashdhiman04/TarsChat"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[#8e8ea0] hover:text-[#A7F0A7] transition-colors font-medium"
           >
-            Yash Dhiman
+            TarsChat
           </a>
         </p>
       </footer>
