@@ -140,7 +140,7 @@ export default function ChatWindow({ conversationId }: Props) {
     setSendError(null);
 
     try {
-      let imageStorageId: string | undefined;
+      let imageStorageId: Id<"_storage"> | undefined;
       let imageMimeType: string | undefined;
 
       if (imageFile) {
@@ -153,7 +153,7 @@ export default function ChatWindow({ conversationId }: Props) {
         });
         const json = (await result.json()) as { storageId?: string };
         if (!json.storageId) throw new Error("Upload failed");
-        imageStorageId = json.storageId;
+        imageStorageId = json.storageId as Id<"_storage">;
         imageMimeType = imageFile.type;
       }
 
