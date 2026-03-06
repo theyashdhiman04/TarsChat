@@ -1,5 +1,50 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+
+async function getCurrentUser(ctx: MutationCtx) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+
+  const me = await ctx.db
+    .query("users")
+    .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+    .unique();
+
+  if (!me) throw new Error("User not found");
+  return me;
+}
+
+async function assertConversationAvailable(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  me: Awaited<ReturnType<typeof getCurrentUser>>
+) {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) throw new Error("Conversation not found");
+  if (!conversation.participants.includes(me._id)) {
+    throw new Error("You do not have access to this conversation");
+  }
+
+  if (!conversation.isGroup) {
+    const otherUserId = conversation.participants.find((id: string) => id !== me._id);
+    if (otherUserId) {
+      const otherUser = await ctx.db.get(otherUserId);
+      const isBlockedByMe = (me.blockedUserIds ?? []).includes(otherUserId);
+      const hasBlockedMe = !!otherUser && (otherUser.blockedUserIds ?? []).includes(me._id);
+
+      if (isBlockedByMe) {
+        throw new Error("Unblock this user to send messages");
+      }
+
+      if (hasBlockedMe) {
+        throw new Error("This user is not available for messaging");
+      }
+    }
+  }
+
+  return conversation;
+}
 
 export const generateUploadUrl = mutation({
   args: {},
@@ -18,14 +63,8 @@ export const sendMessage = mutation({
     imageMimeType: v.optional(v.string()),
   },
   handler: async (ctx, { conversationId, content, imageStorageId, imageMimeType }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
-    const me = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-    if (!me) throw new Error("User not found");
+    const me = await getCurrentUser(ctx);
+    await assertConversationAvailable(ctx, conversationId, me);
 
     if (content.trim().length === 0 && !imageStorageId) {
       throw new Error("Message is empty");
@@ -81,14 +120,13 @@ export const setTyping = mutation({
     isTyping: v.boolean(),
   },
   handler: async (ctx, { conversationId, isTyping }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return;
-
-    const me = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-    if (!me) return;
+    let me;
+    try {
+      me = await getCurrentUser(ctx);
+      await assertConversationAvailable(ctx, conversationId, me);
+    } catch {
+      return;
+    }
 
     const existing = await ctx.db
       .query("typingIndicators")

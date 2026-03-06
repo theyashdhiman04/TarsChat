@@ -22,6 +22,9 @@ export default function CreateGroup({ onClose }: Props) {
   // Fetch users based on search query
   const users = useQuery(api.users.listAllUsers, { search: search || undefined });
   const createGroup = useMutation(api.users_conversations.createGroup);
+  const availableUsers =
+    users === undefined ? undefined : users.filter((user) => user.canMessage);
+  const visibleUsers = availableUsers ?? [];
 
   const toggleUser = (id: Id<"users">) => {
     setSelected((prev) =>
@@ -86,6 +89,10 @@ export default function CreateGroup({ onClose }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-2 custom-scrollbar z-10 space-y-2 scrollbar-thin scrollbar-thumb-[#2a1f3d] scrollbar-track-transparent">
+        <div className="rounded-xl border border-[#2a1f3d] bg-[#0f0a18]/80 px-3 py-2 text-[10px] font-medium text-[#8e8ea0]">
+          Users you blocked, or who blocked you, cannot be added to new groups.
+        </div>
+
         {users === undefined ? (
            // Loading Skeletons
            <div className="space-y-3 mt-2">
@@ -93,13 +100,13 @@ export default function CreateGroup({ onClose }: Props) {
                <div key={i} className="h-14 bg-[#2a1f3d] rounded-xl animate-pulse border border-[#2a1f3d]" />
              ))}
            </div>
-        ) : users.length === 0 ? (
+        ) : visibleUsers.length === 0 ? (
            <div className="text-center py-10 bg-[#2a1f3d] rounded-xl border border-[#2a1f3d] mt-2 border-dashed">
              <p className="text-[#8e8ea0] font-bold text-xs uppercase tracking-wider">No users found</p>
            </div>
         ) : (
           <div className="grid gap-2">
-            {users.map((u) => {
+            {visibleUsers.map((u) => {
               const isSelected = selected.includes(u._id);
               return (
                 <button

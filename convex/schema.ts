@@ -9,6 +9,7 @@ export default defineSchema({
     imageUrl: v.optional(v.string()),
     lastSeen: v.number(),
     isOnline: v.boolean(),
+    blockedUserIds: v.optional(v.array(v.id("users"))),
   })
     .index("by_clerk_id", ["clerkId"])
     .index("by_email", ["email"]),

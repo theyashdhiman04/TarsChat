@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import MessageItem from "./MessageItem";
 import TypingIndicator from "./TypingIndicator";
-import { Send, Smile, Paperclip, ChevronLeft, MoreVertical, Phone, Search, X, Loader2 } from "lucide-react";
+import { Send, Smile, Paperclip, ChevronLeft, MoreVertical, Phone, Search, X, Loader2, Ban } from "lucide-react";
 import  {formatTimestamp}  from "../libs/utils";
 
 const REACTIONS = ["😂", "🫡", "❤️", "💀", "😮", "😢", "😍"];
@@ -25,10 +25,12 @@ export default function ChatWindow({ conversationId }: Props) {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showNewMessages, setShowNewMessages] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
 
   
   // Refs
@@ -47,11 +49,14 @@ export default function ChatWindow({ conversationId }: Props) {
 
   const sendMessage = useMutation(api.messages.sendMessage);
   const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
-
+  const toggleBlockUser = useMutation(api.users.toggleBlockUser);
   const setTyping = useMutation(api.messages.setTyping);
   const markAsRead = useMutation(api.messages.markAsRead);
 
   const currentUser = conversation?.me;
+  const directMessageTarget = !conversation?.isGroup ? conversation?.otherUser : null;
+  const blockState = !conversation?.isGroup ? conversation?.blockState : null;
+  const isMessagingBlocked = !!blockState && !blockState.canMessage;
 
   // --- Logic: Scroll & Message Handling ---
   const scrollToBottom = useCallback((smooth = true) => {
@@ -99,6 +104,10 @@ export default function ChatWindow({ conversationId }: Props) {
     };
   }, [selectedImagePreviewUrl]);
 
+  useEffect(() => {
+    setIsActionsOpen(false);
+  }, [conversationId]);
+
   const clearSelectedImage = useCallback(() => {
     setSelectedImage(null);
     if (selectedImagePreviewUrl) URL.revokeObjectURL(selectedImagePreviewUrl);
@@ -107,6 +116,7 @@ export default function ChatWindow({ conversationId }: Props) {
   }, [selectedImagePreviewUrl]);
 
   const handlePickImage = () => {
+    if (isMessagingBlocked) return;
     fileInputRef.current?.click();
   };
 
@@ -133,6 +143,14 @@ export default function ChatWindow({ conversationId }: Props) {
     const content = input.trim();
     const imageFile = selectedImage;
     if (!content && !imageFile) return;
+    if (isMessagingBlocked) {
+      setSendError(
+        blockState?.isBlockedByMe
+          ? "Unblock this user to send messages."
+          : "This user has blocked you."
+      );
+      return;
+    }
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setTyping({ conversationId, isTyping: false }).catch(() => {});
@@ -168,14 +186,15 @@ export default function ChatWindow({ conversationId }: Props) {
       clearSelectedImage();
       if (inputRef.current) inputRef.current.style.height = "auto";
       setTimeout(() => scrollToBottom(true), 10);
-    } catch {
-      setSendError("Failed to send.");
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Failed to send.");
     } finally {
       setIsUploadingImage(false);
     }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (isMessagingBlocked) return;
     setInput(e.target.value);
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
@@ -187,6 +206,28 @@ export default function ChatWindow({ conversationId }: Props) {
     typingTimeoutRef.current = setTimeout(() => {
        setTyping({ conversationId, isTyping: false }).catch(() => {});
     }, 2000);
+  };
+
+  const handleToggleBlock = async () => {
+    if (!directMessageTarget) return;
+
+    try {
+      setIsUpdatingBlock(true);
+      setSendError(null);
+      await toggleBlockUser({
+        targetUserId: directMessageTarget._id,
+        shouldBlock: !blockState?.isBlockedByMe,
+      });
+      setIsActionsOpen(false);
+      if (!blockState?.isBlockedByMe) {
+        setInput("");
+        clearSelectedImage();
+      }
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Couldn't update block status.");
+    } finally {
+      setIsUpdatingBlock(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -294,9 +335,47 @@ export default function ChatWindow({ conversationId }: Props) {
             <button className="p-1.5 hover:bg-[#2a1f3d] rounded-lg hover:text-[#A7F0A7] transition-colors">
                 <Phone className="w-4 h-4" />
             </button>
-            <button className="p-1.5 hover:bg-[#2a1f3d] rounded-lg hover:text-[#A7F0A7] transition-colors">
-                <MoreVertical className="w-4 h-4" />
-            </button>
+            {directMessageTarget && (
+              <div className="relative">
+                <button
+                  onClick={() => setIsActionsOpen((value) => !value)}
+                  className={`p-1.5 rounded-lg transition-colors ${
+                    isActionsOpen
+                      ? "bg-[#2a1f3d] text-[#A7F0A7]"
+                      : "hover:bg-[#2a1f3d] hover:text-[#A7F0A7]"
+                  }`}
+                  title="Conversation actions"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
+
+                {isActionsOpen && (
+                  <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-52 rounded-2xl border border-[#2a1f3d] bg-[#0f0a18]/95 p-2 shadow-2xl backdrop-blur-md">
+                    <button
+                      onClick={handleToggleBlock}
+                      disabled={isUpdatingBlock}
+                      className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[11px] font-bold uppercase tracking-widest transition-all ${
+                        blockState?.isBlockedByMe
+                          ? "text-[#A7F0A7] hover:bg-[#A7F0A7]/10"
+                          : "text-red-300 hover:bg-red-500/10"
+                      } ${isUpdatingBlock ? "cursor-wait opacity-80" : ""}`}
+                    >
+                      {isUpdatingBlock ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Ban className="w-4 h-4" />
+                      )}
+                      {blockState?.isBlockedByMe ? "Unblock user" : "Block user"}
+                    </button>
+                    <p className="px-3 pt-2 text-[10px] text-[#8e8ea0]">
+                      {blockState?.isBlockedByMe
+                        ? "Unblocking restores direct messaging."
+                        : "Blocking stops new direct messages both ways."}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
         </div>
 
         {isSearchOpen && (
@@ -326,6 +405,32 @@ export default function ChatWindow({ conversationId }: Props) {
           </div>
         )}
       </div>
+
+      {directMessageTarget && isMessagingBlocked && (
+        <div className="mx-3 sm:mx-4 md:mx-5 mt-3 rounded-2xl border border-[#2a1f3d] bg-[#0f0a18]/90 px-4 py-3 text-sm text-[#ececec] z-20">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#6A2FBC]">
+                Messaging paused
+              </p>
+              <p className="mt-1 text-xs text-[#8e8ea0]">
+                {blockState?.isBlockedByMe
+                  ? `You blocked ${directMessageTarget.name}. Unblock them to send new messages.`
+                  : `${directMessageTarget.name} has blocked you. You can still view older messages, but you can't send new ones.`}
+              </p>
+            </div>
+            {blockState?.isBlockedByMe && (
+              <button
+                onClick={handleToggleBlock}
+                disabled={isUpdatingBlock}
+                className="shrink-0 rounded-xl border border-[#A7F0A7]/30 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[#A7F0A7] transition-all hover:bg-[#A7F0A7]/10 disabled:cursor-wait disabled:opacity-80"
+              >
+                {isUpdatingBlock ? "Updating..." : "Unblock"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* --- MESSAGES AREA --- */}
       <div
@@ -438,7 +543,12 @@ export default function ChatWindow({ conversationId }: Props) {
 
           <button
             onClick={handlePickImage}
-            className="p-1.5 text-[#8e8ea0] hover:text-[#A7F0A7] hover:bg-[#2a1f3d]/50 rounded-lg transition-all mr-1 shrink-0"
+            disabled={isMessagingBlocked}
+            className={`p-1.5 rounded-lg transition-all mr-1 shrink-0 ${
+              isMessagingBlocked
+                ? "text-[#5c5c6e] cursor-not-allowed"
+                : "text-[#8e8ea0] hover:text-[#A7F0A7] hover:bg-[#2a1f3d]/50"
+            }`}
             title="Attach image"
           >
              <Paperclip className="w-5 h-5" />
@@ -476,9 +586,16 @@ export default function ChatWindow({ conversationId }: Props) {
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder={`Message ${conversation?.isGroup ? 'Group' : name.split(' ')[0]}...`}
+              disabled={isMessagingBlocked}
+              placeholder={
+                isMessagingBlocked
+                  ? blockState?.isBlockedByMe
+                    ? `Unblock ${name.split(" ")[0]} to message again...`
+                    : `${name.split(" ")[0]} is unavailable for messaging...`
+                  : `Message ${conversation?.isGroup ? "Group" : name.split(" ")[0]}...`
+              }
               rows={1}
-              className="w-full bg-transparent text-[#ececec] placeholder-[#6b6b7b] focus:outline-none resize-none max-h-[150px] custom-scrollbar leading-relaxed py-2 font-medium text-sm"
+              className="w-full bg-transparent text-[#ececec] placeholder-[#6b6b7b] focus:outline-none resize-none max-h-[150px] custom-scrollbar leading-relaxed py-2 font-medium text-sm disabled:cursor-not-allowed disabled:text-[#6b6b7b]"
               style={{ minHeight: '24px' }}
             />
           </div>
@@ -490,10 +607,10 @@ export default function ChatWindow({ conversationId }: Props) {
              
              <button
                 onClick={handleSend}
-                disabled={isUploadingImage || (!input.trim() && !selectedImage)}
+                disabled={isMessagingBlocked || isUploadingImage || (!input.trim() && !selectedImage)}
                 className={`
                   p-2 transition-all shrink-0 rounded-lg flex items-center justify-center
-                  ${(!isUploadingImage && (input.trim() || selectedImage))
+                  ${(!isMessagingBlocked && !isUploadingImage && (input.trim() || selectedImage))
                   ? 'bg-[#6A2FBC] hover:bg-[#7B3FE8] text-white border border-[#A7F0A7]/20' 
                   : 'bg-[#2a1f3d] text-[#5c5c6e] cursor-not-allowed'}
                 `}

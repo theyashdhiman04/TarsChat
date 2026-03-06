@@ -32,6 +32,7 @@ export const upsertUser = mutation({
       imageUrl: args.imageUrl,
       isOnline: true,
       lastSeen: Date.now(),
+      blockedUserIds: [],
     });
   },
 });
@@ -50,6 +51,7 @@ export const listAllUsers = query({
     if (!me) return [];
 
     const allUsers = await ctx.db.query("users").collect();
+    const myBlockedIds = new Set(me.blockedUserIds ?? []);
     const others = allUsers.filter((u) => u.clerkId !== identity.subject);
 
     const filtered =
@@ -71,8 +73,18 @@ export const listAllUsers = query({
             c.participants.includes(user._id)
         );
 
+        const isBlockedByMe = myBlockedIds.has(user._id);
+        const hasBlockedMe = (user.blockedUserIds ?? []).includes(me._id);
+        const canMessage = !isBlockedByMe && !hasBlockedMe;
+
         if (!dm) {
-          return { ...user, hasUnread: false };
+          return {
+            ...user,
+            hasUnread: false,
+            isBlockedByMe,
+            hasBlockedMe,
+            canMessage,
+          };
         }
 
         const readReceipt = await ctx.db
@@ -95,11 +107,52 @@ export const listAllUsers = query({
         return {
           ...user,
           hasUnread: !!unread,
+          isBlockedByMe,
+          hasBlockedMe,
+          canMessage,
         };
       })
     );
 
     return enriched;
+  },
+});
+
+export const toggleBlockUser = mutation({
+  args: {
+    targetUserId: v.id("users"),
+    shouldBlock: v.boolean(),
+  },
+  handler: async (ctx, { targetUserId, shouldBlock }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const me = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+
+    if (!me) throw new Error("User not found");
+    if (me._id === targetUserId) throw new Error("You cannot block yourself");
+
+    const targetUser = await ctx.db.get(targetUserId);
+    if (!targetUser) throw new Error("Target user not found");
+
+    const blockedUserIds = new Set(me.blockedUserIds ?? []);
+    if (shouldBlock) {
+      blockedUserIds.add(targetUserId);
+    } else {
+      blockedUserIds.delete(targetUserId);
+    }
+
+    await ctx.db.patch(me._id, {
+      blockedUserIds: Array.from(blockedUserIds),
+    });
+
+    return {
+      success: true,
+      blocked: shouldBlock,
+    };
   },
 });
 
@@ -178,6 +231,7 @@ export const syncFromWebhook = internalMutation({
           imageUrl,
           isOnline: false,
           lastSeen: Date.now(),
+          blockedUserIds: [],
         });
       }
     } else if (type === "user.deleted") {
