@@ -1,8 +1,13 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 
 function getBlockedIds(user: { blockedUserIds?: Array<string> | undefined }) {
   return new Set(user.blockedUserIds ?? []);
+}
+
+function isUserDoc(user: Doc<"users"> | null): user is Doc<"users"> {
+  return user !== null;
 }
 
 export const getOrCreateDM = mutation({
@@ -69,7 +74,7 @@ export const getConversation = query({
       .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
       .unique();
 
-    const validParticipants = participants.filter(Boolean);
+    const validParticipants = participants.filter(isUserDoc);
     const otherUser = conversation.isGroup
       ? null
       : validParticipants.find((participant) => participant._id !== me?._id) ?? null;
