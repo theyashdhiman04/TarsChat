@@ -62,6 +62,7 @@ export const listAllUsers = query({
         : others;
 
     const conversations = await ctx.db.query("conversations").collect();
+    const now = Date.now();
 
     const enriched = await Promise.all(
       filtered.map(async (user) => {
@@ -96,13 +97,20 @@ export const listAllUsers = query({
 
         const lastReadTime = readReceipt?.lastReadTime ?? 0;
 
-        const unread = await ctx.db
+        const conversationMessages = await ctx.db
           .query("messages")
           .withIndex("by_conversation", (q) =>
-            q.eq("conversationId", dm._id).gt("_creationTime", lastReadTime)
+            q.eq("conversationId", dm._id)
           )
-          .filter((q) => q.neq(q.field("senderId"), me._id))
-          .first();
+          .collect();
+
+        const unread = conversationMessages.some(
+          (message) =>
+            message._creationTime > lastReadTime &&
+            message.senderId !== me._id &&
+            !message.isDeleted &&
+            (message.expiresAt === undefined || message.expiresAt > now)
+        );
 
         return {
           ...user,

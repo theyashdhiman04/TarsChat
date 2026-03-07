@@ -264,9 +264,18 @@ const handleDelete = async () => {
         )}
 
         {/* --- TIMESTAMP --- */}
-        <span className={`text-[10px] font-medium mt-1 text-[#5c5c6e] ${isSender ? "text-right" : "ml-1"}`}>
-          {formatMessageTime(data._creationTime)}
-        </span>
+        <div
+          className={`mt-1 flex items-center gap-2 text-[10px] font-medium ${
+            isSender ? "justify-end text-right" : "ml-1 justify-start text-left"
+          }`}
+        >
+          <span className="text-[#5c5c6e]">{formatMessageTime(data._creationTime)}</span>
+          {!data.isDeleted && data.expiresAt && (
+            <span className="rounded-full border border-[#6A2FBC]/25 bg-[#6A2FBC]/10 px-2 py-0.5 text-[#8e8ea0]">
+              Disappears {formatMessageTime(data.expiresAt)}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

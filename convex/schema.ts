@@ -18,6 +18,7 @@ export default defineSchema({
     participants: v.array(v.id("users")),
     isGroup: v.boolean(),
     groupName: v.optional(v.string()),
+    disappearingMessages24h: v.optional(v.boolean()),
     lastMessageTime: v.optional(v.number()),
     lastMessagePreview: v.optional(v.string()),
   }).index("by_last_message", ["lastMessageTime"]),
@@ -28,6 +29,7 @@ export default defineSchema({
     content: v.string(),
     imageStorageId: v.optional(v.id("_storage")),
     imageMimeType: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
     isDeleted: v.boolean(),
     reactions: v.optional(
       v.array(
@@ -37,7 +39,9 @@ export default defineSchema({
         })
       )
     ),
-  }).index("by_conversation", ["conversationId"]),
+  })
+    .index("by_conversation", ["conversationId"])
+    .index("by_expiration", ["expiresAt"]),
 
   readReceipts: defineTable({
     conversationId: v.id("conversations"),

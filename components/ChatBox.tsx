@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import MessageItem from "./MessageItem";
 import TypingIndicator from "./TypingIndicator";
-import { Send, Smile, Paperclip, ChevronLeft, MoreVertical, Phone, Search, X, Loader2, Ban } from "lucide-react";
+import { Send, Smile, Paperclip, ChevronLeft, MoreVertical, Phone, Search, X, Loader2, Ban, Clock3 } from "lucide-react";
 import  {formatTimestamp}  from "../libs/utils";
 
 const REACTIONS = ["😂", "🫡", "❤️", "💀", "😮", "😢", "😍"];
@@ -31,6 +31,7 @@ export default function ChatWindow({ conversationId }: Props) {
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
+  const [isUpdatingDisappearing, setIsUpdatingDisappearing] = useState(false);
 
   
   // Refs
@@ -50,6 +51,7 @@ export default function ChatWindow({ conversationId }: Props) {
   const sendMessage = useMutation(api.messages.sendMessage);
   const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
   const toggleBlockUser = useMutation(api.users.toggleBlockUser);
+  const setDisappearingMessages = useMutation(api.users_conversations.setDisappearingMessages);
   const setTyping = useMutation(api.messages.setTyping);
   const markAsRead = useMutation(api.messages.markAsRead);
 
@@ -57,6 +59,7 @@ export default function ChatWindow({ conversationId }: Props) {
   const directMessageTarget = !conversation?.isGroup ? conversation?.otherUser : null;
   const blockState = !conversation?.isGroup ? conversation?.blockState : null;
   const isMessagingBlocked = !!blockState && !blockState.canMessage;
+  const isDisappearingEnabled = conversation?.disappearingMessages24h ?? false;
 
   // --- Logic: Scroll & Message Handling ---
   const scrollToBottom = useCallback((smooth = true) => {
@@ -230,6 +233,26 @@ export default function ChatWindow({ conversationId }: Props) {
     }
   };
 
+  const handleToggleDisappearing = async () => {
+    try {
+      setIsUpdatingDisappearing(true);
+      setSendError(null);
+      await setDisappearingMessages({
+        conversationId,
+        enabled: !isDisappearingEnabled,
+      });
+      setIsActionsOpen(false);
+    } catch (err) {
+      setSendError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't update disappearing-message settings."
+      );
+    } finally {
+      setIsUpdatingDisappearing(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -318,6 +341,11 @@ export default function ChatWindow({ conversationId }: Props) {
                   GROUP
                 </span>
              )}
+             {isDisappearingEnabled && (
+                <span className="bg-[#6A2FBC]/15 border border-[#6A2FBC]/40 text-[#A7F0A7] text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-widest">
+                  24H
+                </span>
+             )}
           </div>
           <span className="text-[10px] font-bold text-[#8e8ea0] tracking-wider uppercase truncate">
             {subtitle}
@@ -335,22 +363,65 @@ export default function ChatWindow({ conversationId }: Props) {
             <button className="p-1.5 hover:bg-[#2a1f3d] rounded-lg hover:text-[#A7F0A7] transition-colors">
                 <Phone className="w-4 h-4" />
             </button>
-            {directMessageTarget && (
-              <div className="relative">
-                <button
-                  onClick={() => setIsActionsOpen((value) => !value)}
-                  className={`p-1.5 rounded-lg transition-colors ${
-                    isActionsOpen
-                      ? "bg-[#2a1f3d] text-[#A7F0A7]"
-                      : "hover:bg-[#2a1f3d] hover:text-[#A7F0A7]"
-                  }`}
-                  title="Conversation actions"
-                >
-                  <MoreVertical className="w-4 h-4" />
-                </button>
+            <div className="relative">
+              <button
+                onClick={() => setIsActionsOpen((value) => !value)}
+                className={`p-1.5 rounded-lg transition-colors ${
+                  isActionsOpen
+                    ? "bg-[#2a1f3d] text-[#A7F0A7]"
+                    : "hover:bg-[#2a1f3d] hover:text-[#A7F0A7]"
+                }`}
+                title="Conversation actions"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
 
-                {isActionsOpen && (
-                  <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-52 rounded-2xl border border-[#2a1f3d] bg-[#0f0a18]/95 p-2 shadow-2xl backdrop-blur-md">
+              {isActionsOpen && (
+                  <div
+                    className={`absolute right-0 z-40 rounded-2xl border border-[#2a1f3d] bg-[#0f0a18] p-2 shadow-2xl ${
+                      isDisappearingEnabled
+                        ? "top-[calc(100%+4rem)] w-72"
+                        : "top-[calc(100%+0.5rem)] w-72"
+                    } max-w-[calc(100vw-1rem)]`}
+                  >
+                    <button
+                      onClick={handleToggleDisappearing}
+                      disabled={isUpdatingDisappearing}
+                      className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-all ${
+                        isUpdatingDisappearing ? "cursor-wait opacity-80" : "hover:bg-[#2a1f3d]/80"
+                      }`}
+                    >
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#6A2FBC]/30 bg-[#6A2FBC]/10 text-[#A7F0A7]">
+                        {isUpdatingDisappearing ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Clock3 className="w-4 h-4" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] font-bold uppercase tracking-widest text-[#ececec]">
+                          24h disappearing messages
+                        </div>
+                        <div className="mt-1 text-[10px] text-[#8e8ea0]">
+                          {isDisappearingEnabled
+                            ? "New messages in this chat disappear after 24 hours."
+                            : "Keep messages permanently unless someone deletes them."}
+                        </div>
+                      </div>
+                      <div
+                        className={`mt-0.5 shrink-0 rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${
+                          isDisappearingEnabled
+                            ? "border-[#A7F0A7]/30 bg-[#A7F0A7]/10 text-[#A7F0A7]"
+                            : "border-[#2a1f3d] bg-[#1a1228] text-[#8e8ea0]"
+                        }`}
+                      >
+                        {isDisappearingEnabled ? "On" : "Off"}
+                      </div>
+                    </button>
+
+                    {directMessageTarget && (
+                      <>
+                        <div className="my-2 h-px bg-[#2a1f3d]" />
                     <button
                       onClick={handleToggleBlock}
                       disabled={isUpdatingBlock}
@@ -372,10 +443,11 @@ export default function ChatWindow({ conversationId }: Props) {
                         ? "Unblocking restores direct messaging."
                         : "Blocking stops new direct messages both ways."}
                     </p>
+                      </>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
+            </div>
         </div>
 
         {isSearchOpen && (
@@ -405,6 +477,20 @@ export default function ChatWindow({ conversationId }: Props) {
           </div>
         )}
       </div>
+
+      {isDisappearingEnabled && (
+        <div className="mx-3 sm:mx-4 md:mx-5 mt-3 rounded-2xl border border-[#2a1f3d] bg-[#0f0a18]/80 px-4 py-2.5 text-xs text-[#8e8ea0] z-20">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Clock3 className="w-3.5 h-3.5 text-[#6A2FBC]" />
+            <span className="font-bold uppercase tracking-[0.18em] text-[#6A2FBC]">
+              24h auto-disappear
+            </span>
+            <span className="text-[#5c5c6e]">
+              New messages in this chat are removed 24 hours after sending.
+            </span>
+          </div>
+        </div>
+      )}
 
       {directMessageTarget && isMessagingBlocked && (
         <div className="mx-3 sm:mx-4 md:mx-5 mt-3 rounded-2xl border border-[#2a1f3d] bg-[#0f0a18]/90 px-4 py-3 text-sm text-[#ececec] z-20">

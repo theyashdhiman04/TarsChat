@@ -1,6 +1,12 @@
 import { v } from "convex/values";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+
+const MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isMessageExpired(message: { expiresAt?: number }, now: number) {
+  return message.expiresAt !== undefined && message.expiresAt <= now;
+}
 
 async function getCurrentUser(ctx: MutationCtx) {
   const identity = await ctx.auth.getUserIdentity();
@@ -46,6 +52,16 @@ async function assertConversationAvailable(
   return conversation;
 }
 
+async function getCurrentQueryUser(ctx: QueryCtx) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) return null;
+
+  return await ctx.db
+    .query("users")
+    .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+    .unique();
+}
+
 export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
@@ -64,7 +80,8 @@ export const sendMessage = mutation({
   },
   handler: async (ctx, { conversationId, content, imageStorageId, imageMimeType }) => {
     const me = await getCurrentUser(ctx);
-    await assertConversationAvailable(ctx, conversationId, me);
+    const conversation = await assertConversationAvailable(ctx, conversationId, me);
+    const now = Date.now();
 
     if (content.trim().length === 0 && !imageStorageId) {
       throw new Error("Message is empty");
@@ -76,12 +93,13 @@ export const sendMessage = mutation({
       content,
       imageStorageId,
       imageMimeType,
+      expiresAt: conversation.disappearingMessages24h ? now + MESSAGE_TTL_MS : undefined,
       isDeleted: false,
       reactions: [],
     });
 
     await ctx.db.patch(conversationId, {
-      lastMessageTime: Date.now(),
+      lastMessageTime: now,
       lastMessagePreview: (imageStorageId ? "📷 Image" : content).slice(0, 100),
     });
 
@@ -92,6 +110,15 @@ export const sendMessage = mutation({
 export const listMessages = query({
   args: { conversationId: v.id("conversations") },
   handler: async (ctx, { conversationId }) => {
+    const me = await getCurrentQueryUser(ctx);
+    if (!me) return [];
+
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation || !conversation.participants.includes(me._id)) {
+      return [];
+    }
+
+    const now = Date.now();
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation", (q) =>
@@ -99,9 +126,10 @@ export const listMessages = query({
       )
       .order("asc")
       .collect();
+    const visibleMessages = messages.filter((msg) => !isMessageExpired(msg, now));
 
     const enriched = await Promise.all(
-      messages.map(async (msg) => {
+      visibleMessages.map(async (msg) => {
         const sender = await ctx.db.get(msg.senderId);
         const imageUrl = msg.imageStorageId
           ? await ctx.storage.getUrl(msg.imageStorageId)
@@ -232,6 +260,9 @@ export const toggleReaction = mutation({
 
     const msg = await ctx.db.get(messageId);
     if (!msg) throw new Error("Message not found");
+    if (isMessageExpired(msg, Date.now())) {
+      throw new Error("Message has expired");
+    }
 
     const reactions = msg.reactions ?? [];
     const existing = reactions.find((r) => r.emoji === emoji);
@@ -277,6 +308,9 @@ export const deleteMessage = mutation({
 
     const msg = await ctx.db.get(messageId);
     if (!msg) throw new Error("Message not found");
+    if (isMessageExpired(msg, Date.now())) {
+      throw new Error("Message has expired");
+    }
     if (msg.senderId !== me._id) throw new Error("Not your message");
 
     await ctx.db.patch(messageId, { isDeleted: true });

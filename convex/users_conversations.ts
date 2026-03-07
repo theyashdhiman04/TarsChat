@@ -51,6 +51,7 @@ export const getOrCreateDM = mutation({
     return await ctx.db.insert("conversations", {
       participants: [me._id, otherUserId],
       isGroup: false,
+      disappearingMessages24h: false,
       lastMessageTime: Date.now(),
     });
   },
@@ -85,6 +86,7 @@ export const getConversation = query({
 
     return {
       ...conversation,
+      disappearingMessages24h: conversation.disappearingMessages24h ?? false,
       participants: validParticipants,
       me,
       otherUser,
@@ -115,6 +117,7 @@ export const listConversations = query({
       .collect();
 
     const myConvos = allConvos.filter((c) => c.participants.includes(me._id));
+    const now = Date.now();
 
     const enriched = await Promise.all(
       myConvos.map(async (convo) => {
@@ -131,15 +134,6 @@ export const listConversations = query({
 
         const lastReadTime = readReceipt?.lastReadTime ?? 0;
 
-        const unreadMessage = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation", (q) =>
-            q.eq("conversationId", convo._id).gt("_creationTime", lastReadTime)
-          )
-          .filter((q) => q.neq(q.field("senderId"), me._id))
-          .first();
-        const hasUnread = !!unreadMessage;
-
         const messages = await ctx.db
           .query("messages")
           .withIndex("by_conversation", (q) =>
@@ -147,18 +141,20 @@ export const listConversations = query({
           )
           .collect();
 
-        const unreadCount = messages.filter(
+        const unreadMessages = messages.filter(
           (m) =>
             m._creationTime > lastReadTime &&
             m.senderId !== me._id &&
-            !m.isDeleted
-        ).length;
+            !m.isDeleted &&
+            (m.expiresAt === undefined || m.expiresAt > now)
+        );
 
         return {
           ...convo,
-          participants: participants.filter(Boolean),
-          unreadCount,
-          hasUnread,
+          disappearingMessages24h: convo.disappearingMessages24h ?? false,
+          participants: participants.filter(isUserDoc),
+          unreadCount: unreadMessages.length,
+          hasUnread: unreadMessages.length > 0,
           me,
         };
       })
@@ -203,7 +199,37 @@ export const createGroup = mutation({
       participants: allParticipants,
       isGroup: true,
       groupName,
+      disappearingMessages24h: false,
       lastMessageTime: Date.now(),
     });
+  },
+});
+
+export const setDisappearingMessages = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    enabled: v.boolean(),
+  },
+  handler: async (ctx, { conversationId, enabled }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const me = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+    if (!me) throw new Error("User not found");
+
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) throw new Error("Conversation not found");
+    if (!conversation.participants.includes(me._id)) {
+      throw new Error("You do not have access to this conversation");
+    }
+
+    await ctx.db.patch(conversationId, {
+      disappearingMessages24h: enabled,
+    });
+
+    return { success: true, enabled };
   },
 });
